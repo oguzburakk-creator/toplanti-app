@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Katılım - Toplantı</title>
+  <meta name="theme-color" content="#0ea5e9" />
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, sans-serif; margin: 0; background:#0b1220; color:#e5e7eb; }
+    .wrap { max-width: 520px; margin: 16px auto; padding: 20px; }
+    .card { background:#111827; border:1px solid #1f2937; border-radius:16px; padding:22px; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+    label { display:block; font-size:14px; margin:10px 0 6px; color:#cbd5e1; }
+    input { width:100%; padding:12px 14px; border-radius:12px; border:1px solid #334155; background:#0b1220; color:#e5e7eb; outline:none; }
+    button { width:100%; padding:14px 16px; border-radius:14px; margin-top:16px; background:#0ea5e9; color:white; border:none; font-weight:700; cursor:pointer; }
+    button:disabled { opacity:.6; cursor:not-allowed; }
+    .ok { margin-top:12px; color:#22c55e; font-weight:600; }
+    .err { margin-top:12px; color:#ef4444; font-weight:600; }
+    .muted { color:#94a3b8; font-size:12px; margin-top:8px }
+    .banner { margin:10px 0; padding:10px 12px; border-radius:12px; background:#0b1220; border:1px dashed #334155; }
+    .active { border-color:#22c55e; }
+    .inactive { border-color:#ef4444; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h2>Toplantı Katılım</h2>
+      <p class="muted">Etkinlik kodunu ve adını yaz. <b>Yalnızca yönetici oturumu açıkken</b> katılım gönderebilirsin.</p>
+
+      <label>Etkinlik Kodu (6 hane)</label>
+      <input id="eventCode" placeholder="örn. 123456" inputmode="numeric" pattern="[0-9]{6}" maxlength="6">
+
+      <div id="sessBanner" class="banner inactive">Durum: <b>Aktif toplantı yok</b></div>
+
+      <label>Ad Soyad</label>
+      <input id="fullName" placeholder="Ad Soyad">
+
+      <button id="btn" disabled>Katıldım</button>
+      <div id="msg" class="muted"></div>
+    </div>
+  </div>
+
+  <!-- Firebase SDKs -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
+  <!-- TODO: Replace with your Firebase project configuration -->
+<script>
+  // Paste your Firebase config here from Firebase Console -> Project settings -> General -> Your apps (Web)
+const firebaseConfig = {
+  apiKey: "AIzaSyBI-mg8eA3mVBRoE0d2Wi--YLgsieB71Hg",
+  authDomain: "toplantiapp-edbe9.firebaseapp.com",
+  databaseURL: "https://toplantiapp-edbe9-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "toplantiapp-edbe9",
+  storageBucket: "toplantiapp-edbe9.firebasestorage.app",
+  messagingSenderId: "36239161707",
+  appId: "1:36239161707:web:0ad4d4cada7a17eea6b42e"
+};
+</script>
+
+  <script>
+    const app = firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    // Minimal device id
+    function getDeviceId() {
+      const key = 'device_id';
+      let id = localStorage.getItem(key);
+      if (!id) {
+        id = (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now());
+        localStorage.setItem(key, id);
+      }
+      return id;
+    }
+    function isoNow() { return new Date().toISOString(); }
+    const $ = (id) => document.getElementById(id);
+    const btn = $('btn'), nameI = $('fullName'), codeI = $('eventCode'), msg = $('msg'), banner = $('sessBanner');
+
+    codeI.value = localStorage.getItem('last_event_code') || '';
+    nameI.value = localStorage.getItem('last_full_name') || '';
+
+    let sessRef = null;
+    let sessionActive = false;
+
+    function attachSessionListener(code) {
+      if (sessRef) sessRef.off();
+      if (!/^\d{6}$/.test(code)) {
+        setSession(false, null);
+        return;
+      }
+      sessRef = db.ref(`events/${code}/session`);
+      sessRef.on('value', (snap) => {
+        const v = snap.val() || { active: false };
+        setSession(!!v.active, v);
+      }, (e) => {
+        console.error(e);
+        setSession(false, null);
+      });
+    }
+
+    function setSession(active, meta) {
+      sessionActive = !!active;
+      btn.disabled = !sessionActive;
+      if (sessionActive) {
+        banner.classList.add('active'); banner.classList.remove('inactive');
+        banner.innerHTML = `Durum: <b>Oturum açık</b>${meta?.started_at ? ' • Başlangıç: ' + fmtTime(meta.started_at) : ''}`;
+      } else {
+        banner.classList.add('inactive'); banner.classList.remove('active');
+        banner.innerHTML = 'Durum: <b>Aktif toplantı yok</b>';
+      }
+    }
+
+    codeI.addEventListener('input', () => { attachSessionListener(codeI.value.trim()); });
+    if (codeI.value) attachSessionListener(codeI.value.trim());
+
+    btn.addEventListener('click', async () => {
+      const code = (codeI.value || '').trim();
+      const name = (nameI.value || '').trim();
+      if (!/^\d{6}$/.test(code)) return toast('Lütfen 6 haneli bir kod gir.', true);
+      if (name.length < 2) return toast('Lütfen ad soyad yaz.', true);
+      if (!sessionActive) return toast('Aktif toplantı yok.', true);
+
+      btn.disabled = true;
+      msg.textContent = 'Gönderiliyor…';
+
+      try {
+        const path = `events/${code}/attendance/${getDeviceId()}`;
+        await db.ref(path).set({
+          name, status:'in', time: isoNow()
+        });
+        localStorage.setItem('last_event_code', code);
+        localStorage.setItem('last_full_name', name);
+        toast('Katılım alındı ✅');
+      } catch (e) {
+        console.error(e);
+        toast('Gönderilirken hata oluştu.', true);
+      } finally {
+        btn.disabled = !sessionActive;
+      }
+    });
+
+    function toast(t, err) {
+      msg.className = err ? 'err' : 'ok';
+      msg.textContent = t;
+      setTimeout(() => { msg.className = 'muted'; }, 2000);
+    }
+    function fmtTime(iso) { try { return new Date(iso).toLocaleString(); } catch { return iso || ''; } }
+  </script>
+</body>
+</html>
