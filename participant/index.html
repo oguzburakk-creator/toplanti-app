@@ -25,12 +25,17 @@
   <div class="wrap">
     <div class="card">
       <h2>Toplantı Katılım</h2>
-      <p class="muted">Etkinlik kodunu ve adını yaz. <b>Yalnızca yönetici oturumu açıkken</b> katılım gönderebilirsin.</p>
+      <p class="muted">Etkinlik kodunu ve adını yaz. Oturum <b>aktif</b> ve (varsa) kurallar <b>sağlanmışsa</b> katılım gönderebilirsin.</p>
 
       <label>Etkinlik Kodu (6 hane)</label>
       <input id="eventCode" placeholder="örn. 123456" inputmode="numeric" pattern="[0-9]{6}" maxlength="6">
 
       <div id="sessBanner" class="banner inactive">Durum: <b>Aktif toplantı yok</b></div>
+
+      <div id="tokenBox" style="display:none;">
+        <label>Token (QR ile gelebilir)</label>
+        <input id="tokenInput" placeholder="Örn. ABC123">
+      </div>
 
       <label>Ad Soyad</label>
       <input id="fullName" placeholder="Ad Soyad">
@@ -59,12 +64,39 @@
     function isoNow() { return new Date().toISOString(); }
     const $ = (id) => document.getElementById(id);
     const btn = $('btn'), nameI = $('fullName'), codeI = $('eventCode'), msg = $('msg'), banner = $('sessBanner');
+    const tokenBox = $('tokenBox'), tokenInput = $('tokenInput');
 
-    codeI.value = localStorage.getItem('last_event_code') || '';
+    // Helpers
+    function getParam(name) { return new URLSearchParams(location.search).get(name) || ''; }
+    function haversineMeters(lat1, lon1, lat2, lon2) {
+      const R = 6371000, toRad = d => d*Math.PI/180;
+      const dLat = toRad(lat2-lat1), dLon = toRad(lon2-lon1);
+      const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+      return 2*R*Math.asin(Math.sqrt(a));
+    }
+    function getUserPositionOnce() {
+      return new Promise((resolve, reject) => {
+        if (!navigator.geolocation) return reject('Geolocation desteklenmiyor');
+        navigator.geolocation.getCurrentPosition(
+          pos => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy }),
+          err => reject(err?.message || 'Konum alınamadı'),
+          { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+        );
+      });
+    }
+
+    // Prefill from URL or localStorage
+    const urlCode = getParam('code');
+    if (urlCode) codeI.value = urlCode;
+    else codeI.value = localStorage.getItem('last_event_code') || '';
+    const urlToken = getParam('token');
+    if (urlToken) tokenInput.value = urlToken;
+
     nameI.value = localStorage.getItem('last_full_name') || '';
 
     let sessRef = null;
     let sessionActive = false;
+    let sessionMeta = null;
 
     function attachSessionListener(code) {
       if (sessRef) sessRef.off();
@@ -75,6 +107,7 @@
       sessRef = db.ref(`events/${code}/session`);
       sessRef.on('value', (snap) => {
         const v = snap.val() || { active: false };
+        sessionMeta = v;
         setSession(!!v.active, v);
       }, (e) => {
         console.error(e);
@@ -82,19 +115,58 @@
       });
     }
 
-    function setSession(active, meta) {
+    async function setSession(active, meta) {
       sessionActive = !!active;
-      btn.disabled = !sessionActive;
-      if (sessionActive) {
-        banner.classList.add('active'); banner.classList.remove('inactive');
-        banner.innerHTML = `Durum: <b>Oturum açık</b>${meta?.started_at ? ' • Başlangıç: ' + fmtTime(meta.started_at) : ''}`;
-      } else {
+
+      if (!sessionActive) {
+        btn.disabled = true;
         banner.classList.add('inactive'); banner.classList.remove('active');
         banner.innerHTML = 'Durum: <b>Aktif toplantı yok</b>';
+        tokenBox.style.display = 'none';
+        return;
+      }
+
+      // Token gerekli mi?
+      const needToken = !!meta?.token_enabled;
+      const tokenOk = !needToken || (tokenInput.value.trim() && tokenInput.value.trim().toUpperCase() === String(meta.token||'').toUpperCase());
+      if (needToken && !tokenOk) {
+        tokenBox.style.display = 'block';
+      } else {
+        tokenBox.style.display = needToken ? 'block' : 'none';
+      }
+
+      // Geo gerekli mi?
+      if (meta && meta.geo && typeof meta.geo.lat === 'number' && typeof meta.geo.lng === 'number') {
+        banner.innerHTML = 'Durum: <b>Oturum açık</b> • Konum kontrolü…';
+        try {
+          const you = await getUserPositionOnce();
+          const dist = haversineMeters(you.lat, you.lng, meta.geo.lat, meta.geo.lng);
+          const radius = Number(meta.geo.radius_m || 150);
+          if (dist <= radius) {
+            banner.classList.add('active'); banner.classList.remove('inactive');
+            banner.innerHTML = `Durum: <b>Oturum açık</b> • İçindesiniz (~${Math.round(dist)} m)`;
+            btn.disabled = !tokenOk;
+          } else {
+            btn.disabled = true;
+            banner.classList.add('inactive'); banner.classList.remove('active');
+            banner.innerHTML = `Durum: <b>Oturum açık</b> • <span style="color:#fca5a5">Alan dışı (~${Math.round(dist)} m)</span>`;
+          }
+        } catch (e) {
+          btn.disabled = true;
+          banner.classList.add('inactive'); banner.classList.remove('active');
+          banner.innerHTML = 'Durum: <b>Oturum açık</b> • <span style="color:#fca5a5">Konum izni gerekli</span>';
+        }
+      } else {
+        // Geo yok — sadece token şartına bak
+        banner.classList.add('active'); banner.classList.remove('inactive');
+        banner.innerHTML = `Durum: <b>Oturum açık</b>${meta?.started_at ? ' • Başlangıç: ' + new Date(meta.started_at).toLocaleString() : ''}`;
+        btn.disabled = !tokenOk;
       }
     }
 
     codeI.addEventListener('input', () => { attachSessionListener(codeI.value.trim()); });
+    tokenInput.addEventListener('input', () => { if (sessionMeta) setSession(sessionActive, sessionMeta); });
+
     if (codeI.value) attachSessionListener(codeI.value.trim());
 
     btn.addEventListener('click', async () => {
@@ -103,6 +175,27 @@
       if (!/^\d{6}$/.test(code)) return toast('Lütfen 6 haneli bir kod gir.', true);
       if (name.length < 2) return toast('Lütfen ad soyad yaz.', true);
       if (!sessionActive) return toast('Aktif toplantı yok.', true);
+
+      // Token kontrolü
+      if (sessionMeta?.token_enabled) {
+        const t = tokenInput.value.trim();
+        if (!t || t.toUpperCase() !== String(sessionMeta.token||'').toUpperCase()) {
+          return toast('Geçerli token gerekli.', true);
+        }
+      }
+
+      // Geo varsa tekrar mesafe kontrolü
+      if (sessionMeta?.geo) {
+        try {
+          const you = await getUserPositionOnce();
+          const dist = haversineMeters(you.lat, you.lng, sessionMeta.geo.lat, sessionMeta.geo.lng);
+          if (dist > Number(sessionMeta.geo.radius_m||150)) {
+            return toast('Alan dışındasınız.', true);
+          }
+        } catch(e) {
+          return toast('Konum izni gerekli.', true);
+        }
+      }
 
       btn.disabled = true;
       msg.textContent = 'Gönderiliyor…';
@@ -119,7 +212,7 @@
         console.error(e);
         toast('Gönderilirken hata oluştu.', true);
       } finally {
-        btn.disabled = !sessionActive;
+        btn.disabled = false;
       }
     });
 
@@ -128,7 +221,6 @@
       msg.textContent = t;
       setTimeout(() => { msg.className = 'muted'; }, 2000);
     }
-    function fmtTime(iso) { try { return new Date(iso).toLocaleString(); } catch { return iso || ''; } }
   </script>
 </body>
 </html>
