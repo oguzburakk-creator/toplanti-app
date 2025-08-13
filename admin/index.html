@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Yönetici - Katılım</title>
+  <meta name="theme-color" content="#0ea5e9" />
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, sans-serif; margin:0; background:#0b1220; color:#e5e7eb; }
+    .wrap { max-width: 980px; margin: 16px auto; padding: 20px; }
+    .card { background:#111827; border:1px solid #1f2937; border-radius:16px; padding:22px; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+    label { display:block; font-size:14px; margin:10px 0 6px; color:#cbd5e1; }
+    input { padding:10px 12px; border-radius:12px; border:1px solid #334155; background:#0b1220; color:#e5e7eb; outline:none; }
+    button { padding:10px 14px; border-radius:12px; background:#0ea5e9; color:white; border:none; font-weight:700; cursor:pointer; }
+    button:disabled { opacity:.6; cursor:not-allowed; }
+    table { width:100%; border-collapse: collapse; margin-top:16px; }
+    th, td { border-bottom:1px solid #1f2937; padding:10px; text-align:left; }
+    th { color:#93c5fd; font-weight:700; }
+    .muted { color:#94a3b8; font-size:12px }
+    .pill { display:inline-block; padding:4px 8px; border-radius:999px; background:#1f2937; }
+    .ok { color:#22c55e; }
+    .bad { color:#ef4444; }
+    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .grid { display:grid; grid-template-columns: repeat(auto-fit,minmax(160px,1fr)); gap:8px; margin-top:8px; }
+    a.link { color:#93c5fd; }
+    code.token { background:#0b1220; border:1px solid #334155; padding:6px 8px; border-radius:8px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h2>Katılım Listesi (Yönetici)</h2>
+      <p class="muted">Etkinlik kodunu gir. Oturum ayarlarını belirle. Oturumu başlatınca kurallar devreye girer.</p>
+      <div class="row">
+        <label for="eventCode" style="margin:0;">Etkinlik Kodu:</label>
+        <input id="eventCode" placeholder="123456" inputmode="numeric" pattern="[0-9]{6}" maxlength="6">
+        <button id="connectBtn">Bağlan</button>
+        <span id="status" class="muted">Hazır</span>
+      </div>
+
+      <div class="grid">
+        <div>
+          <label>Konum (lat)</label>
+          <input id="lat" placeholder="41.0" />
+        </div>
+        <div>
+          <label>Konum (lng)</label>
+          <input id="lng" placeholder="29.0" />
+        </div>
+        <div>
+          <label>Yarıçap (m)</label>
+          <input id="radius" type="number" value="150" min="20" max="2000" />
+        </div>
+        <div>
+          <label>QR/Token Zorunlu mu?</label>
+          <input id="tokenRequired" type="checkbox" />
+        </div>
+        <div>
+          <label>Token</label>
+          <input id="token" placeholder="(Otomatik üret)" />
+        </div>
+        <div>
+          <label>&nbsp;</label>
+          <button id="genTokenBtn" type="button">Token üret</button>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:10px;">
+        <button id="startBtn" disabled>Oturumu Başlat</button>
+        <button id="stopBtn" disabled>Oturumu Bitir</button>
+        <button id="clearBtn" disabled title="Sadece listeyi temizler">Listeyi Temizle</button>
+        <span id="sess" class="muted">Durum: bilinmiyor</span>
+      </div>
+
+      <div style="margin-top:12px;">
+        <span class="pill">Toplam: <b id="total">0</b></span>
+        <span class="muted" style="margin-left:8px">Katılımcı linki: <a class="link" id="participantLink" href="../participant/" target="_blank">../participant/</a></span>
+      </div>
+
+      <table id="tbl">
+        <thead>
+          <tr>
+            <th>Ad Soyad</th>
+            <th>Cihaz</th>
+            <th>Durum</th>
+            <th>Zaman</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+  <script>const firebaseConfig = {"apiKey": "AIzaSyBI-mg8eA3mVBRoE0d2Wi--YLgsieB71Hg", "authDomain": "toplantiapp-edbe9.firebaseapp.com", "databaseURL": "https://toplantiapp-edbe9-default-rtdb.europe-west1.firebasedatabase.app", "projectId": "toplantiapp-edbe9", "storageBucket": "toplantiapp-edbe9.firebasestorage.app", "messagingSenderId": "36239161707", "appId": "1:36239161707:web:0ad4d4cada7a17eea6b42e"};</script>
+
+  <script>
+    const app = firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+    const $ = (id) => document.getElementById(id);
+
+    const codeI = $('eventCode'), btn = $('connectBtn'), tbody = $('tbody'), total = $('total'), statusEl = $('status');
+    const startBtn = $('startBtn'), stopBtn = $('stopBtn'), clearBtn = $('clearBtn'), sessEl = $('sess');
+    const latI = $('lat'), lngI = $('lng'), radI = $('radius'), tokenReq = $('tokenRequired'), tokenI = $('token'), genTokenBtn = $('genTokenBtn');
+    const participantLink = $('participantLink');
+    let attRef = null, sessRef = null, currentCode = null;
+
+    function randomToken(n=6) {
+      const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+      let t=''; for (let i=0;i<n;i++) t += chars[Math.floor(Math.random()*chars.length)];
+      return t;
+    }
+
+    genTokenBtn.addEventListener('click', () => {
+      tokenI.value = randomToken(6);
+    });
+
+    btn.addEventListener('click', () => {
+      const code = (codeI.value || '').trim();
+      if (!/^\d{6}$/.test(code)) { setStatus('Lütfen 6 hane kod.', true); return; }
+      localStorage.setItem('admin_event_code', code);
+      connect(code);
+      participantLink.href = `../participant/?code=${code}`;
+    });
+
+    codeI.value = localStorage.getItem('admin_event_code') || '';
+
+    function connect(code) {
+      if (attRef) attRef.off();
+      if (sessRef) sessRef.off();
+      currentCode = code;
+      setStatus('Bağlanıyor…');
+
+      attRef = db.ref(`events/${code}/attendance`);
+      attRef.on('value', (snap) => {
+        const data = snap.val() || {};
+        const rows = Object.entries(data).map(([device, v]) => ({ device, ...v })).sort((a,b) => (b.time||'').localeCompare(a.time||''));
+        render(rows);
+        setStatus('Bağlı (canlı)');
+      }, (err) => setStatus('Hata: ' + (err?.message || err), true));
+
+      sessRef = db.ref(`events/${code}/session`);
+      sessRef.on('value', (snap) => {
+        const v = snap.val() || { active: false };
+        updateSessionUi(v);
+      });
+      startBtn.disabled = false;
+      stopBtn.disabled = false;
+      clearBtn.disabled = false;
+    }
+
+    function render(rows) {
+      tbody.innerHTML = rows.map(r => `
+        <tr>
+          <td>${escapeHtml(r.name||'')}</td>
+          <td><span class="muted">${escapeHtml((r.device||r.device_id||'').toString().slice(0,8))}</span></td>
+          <td>${r.status==='in' ? '<span class="ok">Katıldı</span>' : (r.status||'')}</td>
+          <td>${fmtTime(r.time)}</td>
+        </tr>
+      `).join('');
+      total.textContent = rows.length;
+    }
+
+    function updateSessionUi(meta) {
+      const txt = meta.active ? ('Oturum açık' + (meta.started_at ? ' • Başlangıç: ' + fmtTime(meta.started_at) : '')) 
+                              : ('Oturum kapalı' + (meta.ended_at ? ' • Bitiş: ' + fmtTime(meta.ended_at) : ''));
+      sessEl.textContent = 'Durum: ' + txt;
+      sessEl.className = meta.active ? 'ok' : 'bad';
+    }
+
+    function setStatus(t, err) {
+      statusEl.textContent = t;
+      statusEl.style.color = err ? '#ef4444' : '#94a3b8';
+    }
+
+    function fmtTime(iso) { try { return new Date(iso).toLocaleString(); } catch { return iso || ''; } }
+    function isoNow() { return new Date().toISOString(); }
+    function escapeHtml(s) { return String(s).replace(/[&<>\"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'})[m]); }
+
+    startBtn.addEventListener('click', async () => {
+      if (!currentCode) return;
+      const lat = parseFloat(latI.value);
+      const lng = parseFloat(lngI.value);
+      const radiusM = Math.max(20, Math.min(2000, Number(radI.value || 150)));
+      const tokenEnabled = !!tokenReq.checked;
+      const tokenVal = (tokenI.value || '').trim();
+
+      const payload = { active: true, started_at: isoNow() };
+      if (!isNaN(lat) && !isNaN(lng)) payload.geo = { lat: lat, lng: lng, radius_m: radiusM };
+      if (tokenEnabled && tokenVal) payload.token = tokenVal;
+      if (tokenEnabled) payload.token_enabled = true;
+
+      try {
+        await db.ref(`events/${currentCode}/session`).set(payload);
+        setStatus('Oturum açıldı');
+      } catch(e) {
+        setStatus('Hata: ' + (e?.message||e), true);
+      }
+    });
+
+    stopBtn.addEventListener('click', async () => {
+      if (!currentCode) return;
+      try {
+        await db.ref(`events/${currentCode}/session`).update({ active: false, ended_at: isoNow() });
+        if (attRef) attRef.off();
+        if (sessRef) sessRef.off();
+        tbody.innerHTML = '';
+        total.textContent = '0';
+        setStatus('Oturum kapatıldı');
+      } catch(e) {
+        setStatus('Hata: ' + (e?.message||e), true);
+      }
+    });
+
+    clearBtn.addEventListener('click', async () => {
+      if (!currentCode) return;
+      if (!confirm('Listeyi temizlemek istediğine emin misin? Katılım kayıtları silinir.')) return;
+      try {
+        await db.ref(`events/${currentCode}/attendance`).remove();
+        setStatus('Liste temizlendi');
+      } catch(e) { setStatus('Hata: ' + (e?.message||e), true); }
+    });
+
+    if (codeI.value && /^\d{6}$/.test(codeI.value)) { 
+      connect(codeI.value); 
+      participantLink.href = `../participant/?code=${codeI.value}`;
+    }
+  </script>
+</body>
+</html>
