@@ -1,1 +1,201 @@
-<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><title>Yönetici - Katılım (v5-geo)</title></head><body><h2>Yönetici v5-geo</h2><script src='https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js'></script><script src='https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js'></script><script>const firebaseConfig={apiKey:'AIzaSyBI-mg8eA3mVBRoE0d2Wi--YLgsieB71Hg',authDomain:'toplantiapp-edbe9.firebaseapp.com',databaseURL:'https://toplantiapp-edbe9-default-rtdb.europe-west1.firebasedatabase.app',projectId:'toplantiapp-edbe9',storageBucket:'toplantiapp-edbe9.firebasestorage.app',messagingSenderId:'36239161707',appId:'1:36239161707:web:0ad4d4cada7a17eea6b42e'};const app=firebase.initializeApp(firebaseConfig);</script></body></html>
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Katılım Listesi (Yönetici) v5-geo</title>
+  <style>
+    body { font-family: system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,sans-serif; margin:0; background:#0b1220; color:#e5e7eb; }
+    .wrap { max-width: 920px; margin: 16px auto; padding: 20px; }
+    .card { background:#111827; border:1px solid #1f2937; border-radius:16px; padding:22px; }
+    label { display:block; font-size:14px; margin:10px 0 6px; color:#cbd5e1; }
+    input { padding:10px 12px; border-radius:12px; border:1px solid #334155; background:#0b1220; color:#e5e7eb; outline:none; }
+    button { padding:10px 14px; border-radius:12px; background:#0ea5e9; color:white; border:none; font-weight:700; cursor:pointer; }
+    table { width:100%; border-collapse: collapse; margin-top:16px; }
+    th, td { border-bottom:1px solid #1f2937; padding:10px; text-align:left; }
+    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .muted { color:#94a3b8; font-size:12px }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h2>Katılım Listesi (Yönetici) — v5-geo</h2>
+      <p class="muted">Kod gir → Bağlan → Mekânı yaz (adres / Google Maps linki) → <b>Bul</b> → Yarıçap → <b>Oturumu Başlat</b></p>
+
+      <div class="row">
+        <label style="margin:0;">Etkinlik Kodu:</label>
+        <input id="eventCode" placeholder="123456" inputmode="numeric" pattern="[0-9]{6}" maxlength="6">
+        <button id="connectBtn">Bağlan</button>
+        <span id="status" class="muted">Hazır</span>
+      </div>
+
+      <label style="margin-top:12px">Mekân (adres / mekân adı / Google Maps linki)</label>
+      <div class="row">
+        <input id="placeInput" style="flex:1; min-width:260px" placeholder="örn. Hilton Maslak ya da https://maps.app.goo.gl/...">
+        <button id="findBtn">Bul</button>
+        <span id="placeFound" class="muted"></span>
+      </div>
+
+      <div class="row" style="margin-top:8px">
+        <label style="margin:0;">Yarıçap (metre):</label>
+        <input id="radius" type="number" value="150" min="50" max="1000" style="width:100px">
+        <span class="muted">İç mekânda 100–200 m önerilir.</span>
+      </div>
+
+      <div class="row" style="margin-top:10px;">
+        <button id="startBtn" disabled>Oturumu Başlat</button>
+        <button id="stopBtn" disabled>Oturumu Bitir</button>
+        <button id="clearBtn" disabled title="Sadece listeyi temizler">Listeyi Temizle</button>
+        <span id="sess" class="muted">Durum: bilinmiyor</span>
+      </div>
+
+      <div style="margin-top:12px;">
+        <span class="muted">Katılımcı linki: <a style="color:#93c5fd" href="../participant/" target="_blank">../participant/</a></span>
+      </div>
+
+      <table>
+        <thead>
+          <tr><th>Ad Soyad</th><th>Cihaz</th><th>Durum</th><th>Zaman</th></tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyBI-mg8eA3mVBRoE0d2Wi--YLgsieB71Hg",
+      authDomain: "toplantiapp-edbe9.firebaseapp.com",
+      databaseURL: "https://toplantiapp-edbe9-default-rtdb.europe-west1.firebasedatabase.app",
+      projectId: "toplantiapp-edbe9",
+      storageBucket: "toplantiapp-edbe9.firebasestorage.app",
+      messagingSenderId: "36239161707",
+      appId: "1:36239161707:web:0ad4d4cada7a17eea6b42e"
+    };
+  </script>
+
+  <script>
+    const app = firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+    const $ = (id)=>document.getElementById(id);
+
+    const codeI=$('eventCode'), btn=$('connectBtn'), statusEl=$('status');
+    const startBtn=$('startBtn'), stopBtn=$('stopBtn'), clearBtn=$('clearBtn'), sessEl=$('sess');
+    const findBtn=$('findBtn'), placeInput=$('placeInput'), placeFound=$('placeFound'), radiusI=$('radius');
+    const tbody=$('tbody');
+
+    let attRef=null, sessRef=null, currentCode=null, selectedPlace=null;
+
+    function setStatus(t,err){ statusEl.textContent=t; statusEl.style.color = err?'#ef4444':'#94a3b8'; }
+    function fmtTime(iso){ try{return new Date(iso).toLocaleString();}catch{return iso||'';} }
+    function isoNow(){ return new Date().toISOString(); }
+    function escapeHtml(s){ return String(s).replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m])); }
+
+    btn.addEventListener('click', ()=>{
+      const code=(codeI.value||'').trim();
+      if(!/^\d{6}$/.test(code)){ setStatus('Lütfen 6 hane kod.', true); return; }
+      localStorage.setItem('admin_event_code', code);
+      connect(code);
+    });
+    codeI.value = localStorage.getItem('admin_event_code') || '';
+
+    function connect(code){
+      if(attRef) attRef.off(); if(sessRef) sessRef.off();
+      currentCode = code; setStatus('Bağlanıyor…');
+
+      attRef = db.ref(`events/${code}/attendance`);
+      attRef.on('value', snap=>{
+        const data=snap.val()||{};
+        const rows=Object.entries(data).map(([device,v])=>({device,...v})).sort((a,b)=>(b.time||'').localeCompare(a.time||''));
+        tbody.innerHTML = rows.map(r=>`
+          <tr>
+            <td>${escapeHtml(r.name||'')}</td>
+            <td><span class="muted">${escapeHtml((r.device||r.device_id||'').toString().slice(0,8))}</span></td>
+            <td>${r.status==='in'?'Katıldı':(r.status||'')}</td>
+            <td>${fmtTime(r.time)}</td>
+          </tr>`).join('');
+      }, err=>setStatus('Hata: '+(err?.message||err), true));
+
+      sessRef = db.ref(`events/${code}/session`);
+      sessRef.on('value', snap=>{
+        const v=snap.val()||{active:false};
+        const txt = v.active ? ('Oturum açık' + (v.started_at ? ' • Başlangıç: '+fmtTime(v.started_at):'')) :
+                               ('Oturum kapalı' + (v.ended_at ? ' • Bitiş: '+fmtTime(v.ended_at):''));
+        sessEl.textContent='Durum: '+txt;
+      });
+
+      startBtn.disabled=false; stopBtn.disabled=false; clearBtn.disabled=false;
+      setStatus('Bağlı (canlı)');
+    }
+
+    // Adres/Maps parsing & geocode
+    function parseCoordsFromInput(raw){
+      if(!raw) return null; const s=raw.trim();
+      const m1=s.match(/^\s*(-?\d+(\.\d+)?)\s*,\s*(-?\d+(\.\d+)?)\s*$/);
+      if(m1) return {lat:parseFloat(m1[1]), lng:parseFloat(m1[3]), label:s};
+      const m2=s.match(/@(-?\d+(\.\d+)?),\s*(-?\d+(\.\d+)?)/);
+      if(m2) return {lat:parseFloat(m2[1]), lng:parseFloat(m2[3]), label:s};
+      const m3=s.match(/[?&](q|ll)=(-?\d+(\.\d+)?),\s*(-?\d+(\.\d+)?)/);
+      if(m3) return {lat:parseFloat(m3[2]), lng:parseFloat(m3[4]), label:s};
+      return null;
+    }
+    async function geocodeFree(text){
+      const url='https://geocode.maps.co/search?q='+encodeURIComponent(text);
+      const r=await fetch(url,{headers:{'Accept':'application/json'}});
+      if(!r.ok) throw new Error('Geocode hata: '+r.status);
+      const arr=await r.json(); if(!Array.isArray(arr)||arr.length===0) throw new Error('Adres bulunamadı');
+      const best=arr[0]; return {lat:parseFloat(best.lat), lng:parseFloat(best.lon), label:best.display_name||text};
+    }
+
+    findBtn.addEventListener('click', async ()=>{
+      const query=(placeInput.value||'').trim();
+      if(!query){ placeFound.textContent='Lütfen adres/mekân/link gir'; return; }
+      setStatus('Adres aranıyor…');
+      try{
+        const parsed=parseCoordsFromInput(query);
+        selectedPlace = parsed ? parsed : await geocodeFree(query);
+        placeFound.textContent = `Seçildi: ${selectedPlace.label} (≈ ${selectedPlace.lat.toFixed(5)}, ${selectedPlace.lng.toFixed(5)})`;
+        setStatus('Adres bulundu ✔');
+      }catch(e){
+        console.error(e); selectedPlace=null; placeFound.textContent='Bulunamadı'; setStatus('Adres bulunamadı', true);
+      }
+    });
+
+    startBtn.addEventListener('click', async ()=>{
+      if(!currentCode) return;
+      const radiusM = Math.max(50, Math.min(1000, Number(document.getElementById('radius').value || 150)));
+      try{
+        const payload={active:true, started_at:isoNow()};
+        if(selectedPlace){ payload.place={lat:selectedPlace.lat, lng:selectedPlace.lng, radius_m:radiusM, label:selectedPlace.label}; }
+        await db.ref(`events/${currentCode}/session`).set(payload);
+        setStatus(selectedPlace?'Oturum açıldı (konum set)':'Oturum açıldı (konum yok)');
+      }catch(e){ setStatus('Hata: '+(e?.message||e), true); }
+    });
+
+    stopBtn.addEventListener('click', async ()=>{
+      if(!currentCode) return;
+      try{
+        await db.ref(`events/${currentCode}/session`).update({active:false, ended_at:isoNow()});
+        if(attRef) attRef.off(); if(sessRef) sessRef.off();
+        tbody.innerHTML=''; codeI.value=''; localStorage.removeItem('admin_event_code'); currentCode=null;
+        setStatus('Oturum kapatıldı ve kod temizlendi'); sessEl.textContent='Durum: Oturum kapalı';
+        startBtn.disabled=true; stopBtn.disabled=true; clearBtn.disabled=true; placeFound.textContent='';
+        selectedPlace=null;
+      }catch(e){ setStatus('Hata: '+(e?.message||e), true); }
+    });
+
+    clearBtn.addEventListener('click', async ()=>{
+      if(!currentCode) return;
+      if(!confirm('Listeyi temizlemek istiyor musun?')) return;
+      try{ await db.ref(`events/${currentCode}/attendance`).remove(); setStatus('Liste temizlendi'); }
+      catch(e){ setStatus('Hata: '+(e?.message||e), true); }
+    });
+
+    if (codeI.value && /^\d{6}$/.test(codeI.value)) connect(codeI.value);
+  </script>
+</body>
+</html>
