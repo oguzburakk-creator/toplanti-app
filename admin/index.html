@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Yönetici - Katılım (Son)</title>
+  <meta name="theme-color" content="#0ea5e9" />
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, sans-serif; margin:0; background:#0b1220; color:#e5e7eb; }
+    .wrap { max-width: 960px; margin: 16px auto; padding: 20px; }
+    .card { background:#111827; border:1px solid #1f2937; border-radius:16px; padding:22px; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+    label { display:block; font-size:14px; margin:10px 0 6px; color:#cbd5e1; }
+    input { padding:10px 12px; border-radius:12px; border:1px solid #334155; background:#0b1220; color:#e5e7eb; outline:none; }
+    button { padding:10px 14px; border-radius:12px; background:#0ea5e9; color:white; border:none; font-weight:700; cursor:pointer; }
+    button:disabled { opacity:.6; cursor:not-allowed; }
+    table { width:100%; border-collapse: collapse; margin-top:16px; }
+    th, td { border-bottom:1px solid #1f2937; padding:10px; text-align:left; }
+    th { color:#93c5fd; font-weight:700; }
+    .muted { color:#94a3b8; font-size:12px }
+    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .pill { display:inline-block; padding:4px 8px; border-radius:999px; background:#1f2937; }
+    .ok { color:#22c55e; } .bad { color:#ef4444; }
+    a.link { color:#93c5fd; }
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
+    .small {font-size:12px;color:#a1a1aa}
+    .section-title{margin-top:14px;font-weight:700;color:#93c5fd}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h2>Katılım Listesi (Yönetici) — Son Sürüm</h2>
+      <p class="muted">
+        1) Mekânı adla/Maps linkiyle <b>Bul</b> <span class="small">(A4 Eko Yapı Market gibi)</span> veya <b>PIN</b> ile mekândaki görevliye “Konumumu Ayarla” dedirt. <br>
+        2) Yarıçapı seç, <b>Oturumu Başlat</b>. <br>
+        3) Katılımcılar alanda ise “Katıldım” diyebilir.
+      </p>
+
+      <div class="section-title">Oturum</div>
+      <div class="row">
+        <button id="startBtn" disabled>Oturumu Başlat</button>
+        <button id="stopBtn" disabled>Oturumu Bitir</button>
+        <button id="clearBtn" disabled title="Sadece listeyi temizler">Listeyi Temizle</button>
+        <span id="sess" class="muted">Durum: kapalı</span>
+      </div>
+
+      <div class="section-title">Mekânı Belirle (Seçenek 1: Ad/Link ile)</div>
+      <div class="row">
+        <input id="placeInput" style="flex:1; min-width:260px" placeholder="örn. A4 Eko Yapı Market Afyon 2. Sanayi veya Google Maps linki">
+        <button id="findBtn">Bul</button>
+        <span id="placeFound" class="muted"></span>
+      </div>
+
+      <div class="row" style="margin-top:8px">
+        <label style="margin:0;">Yarıçap (metre):</label>
+        <input id="radius" type="number" value="150" min="50" max="1000" style="width:110px">
+        <span class="muted">İç mekân için 100–200 m önerilir.</span>
+      </div>
+
+      <div class="section-title">Mekânı Belirle (Seçenek 2: Yerinde PIN ile)</div>
+      <p class="muted">Mekândaki görevliye bu PIN ve linki yolla; o kişi <b>locator</b> sayfasında “Buradayım” deyince konum tek tıkla set olur.</p>
+      <div class="row">
+        PIN: <span id="pin" class="mono"></span>
+        <span style="width:10px"></span>
+        Link: <span id="pinLink" class="mono"></span>
+      </div>
+
+      <div style="margin-top:12px;">
+        <span class="pill">Toplam: <b id="total">0</b></span>
+        <span class="muted" style="margin-left:8px">Katılımcı linki: <a class="link" href="../participant/" target="_blank">../participant/</a></span>
+      </div>
+
+      <table>
+        <thead><tr><th>Ad Soyad</th><th>Cihaz</th><th>Durum</th><th>Zaman</th></tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+  <script>const firebaseConfig = {"apiKey": "AIzaSyCs1M0nXymIFlznyE4BCdR1I5AHYO3cjgY", "authDomain": "toplanti-7d4f7.firebaseapp.com", "databaseURL": "https://toplanti-7d4f7-default-rtdb.europe-west1.firebasedatabase.app", "projectId": "toplanti-7d4f7", "storageBucket": "toplanti-7d4f7.firebasestorage.app", "messagingSenderId": "27029331941", "appId": "1:27029331941:web:ea9cefe6a567e305fb590c"};</script>
+  <script>
+    const app = firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+    const $ = (id)=>document.getElementById(id);
+
+    const startBtn=$('startBtn'), stopBtn=$('stopBtn'), clearBtn=$('clearBtn'), sessEl=$('sess');
+    const findBtn=$('findBtn'), placeInput=$('placeInput'), placeFound=$('placeFound'), radiusI=$('radius');
+    const tbody=$('tbody'), totalEl=$('total'), pinEl=$('pin'), pinLinkEl=$('pinLink');
+
+    let attRef=null, sessRef=null;
+    let selectedPlace=null; // {lat,lng,label}
+    let currentSessionId=null;
+
+    function setStatus(t,err){ sessEl.textContent='Durum: '+t; sessEl.style.color = err?'#ef4444':'#94a3b8'; }
+    function fmtTime(iso){ try{return new Date(iso).toLocaleString();}catch{return iso||''} }
+    function isoNow(){ return new Date().toISOString(); }
+    function escapeHtml(s){ return String(s).replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m])); }
+    function newPIN(){ return Math.random().toString(36).slice(2,8).toUpperCase(); }
+
+    function parseCoordsFromInput(raw){
+      if(!raw) return null; const s=raw.trim();
+      const m1=s.match(/^\s*(-?\d+(\.\d+)?)\s*,\s*(-?\d+(\.\d+)?)\s*$/);
+      if(m1) return {lat:parseFloat(m1[1]), lng:parseFloat(m1[3]), label:s};
+      const m2=s.match(/@(-?\d+(\.\d+)?),\s*(-?\d+(\.\d+)?)/);
+      if(m2) return {lat:parseFloat(m2[1]), lng:parseFloat(m2[3]), label:s};
+      const m3=s.match(/[?&](q|ll)=(-?\d+(\.\d+)?),\s*(-?\d+(\.\d+)?)/);
+      if(m3) return {lat:parseFloat(m3[2]), lng:parseFloat(m3[4]), label:s};
+      return null;
+    }
+    async function geocodeFree(text){
+      const url='https://geocode.maps.co/search?q='+encodeURIComponent(text);
+      const r=await fetch(url,{headers:{'Accept':'application/json'}});
+      if(!r.ok) throw new Error('Adres aranamadı ('+r.status+')');
+      const arr=await r.json();
+      if(!Array.isArray(arr)||arr.length===0) throw new Error('Adres bulunamadı');
+      const best=arr[0]; return { lat: parseFloat(best.lat), lng: parseFloat(best.lon), label: best.display_name || text };
+    }
+
+    function attachAttendance(sessionId){
+      if(attRef) attRef.off();
+      attRef = db.ref('sessions/'+sessionId+'/attendance');
+      attRef.on('value', snap=>{
+        const data=snap.val()||{};
+        const rows=Object.entries(data).map(([device,v])=>({device,...v})).sort((a,b)=>(b.time||'').localeCompare(a.time||''));
+        tbody.innerHTML = rows.map(r=>`
+          <tr>
+            <td>${escapeHtml(r.name||'')}</td>
+            <td><span class="muted">${escapeHtml((r.device||r.device_id||'').toString().slice(0,8))}</span></td>
+            <td>${r.status==='in'?'Katıldı':(r.status||'')}</td>
+            <td>${fmtTime(r.time)}</td>
+          </tr>`).join('');
+        totalEl.textContent = rows.length;
+      });
+    }
+
+    function attachSession(){
+      if(sessRef) sessRef.off();
+      sessRef = db.ref('current');
+      sessRef.on('value', snap=>{
+        const cur=snap.val();
+        if(!cur || !cur.active){ setStatus('kapalı'); startBtn.disabled=false; stopBtn.disabled=true; clearBtn.disabled=true; currentSessionId=null; totalEl.textContent='0'; tbody.innerHTML=''; return; }
+        currentSessionId = cur.session_id;
+        setStatus('açık'+(cur.place? ' • Mekân set':' • Mekân bekleniyor'));
+        startBtn.disabled=true; stopBtn.disabled=false; clearBtn.disabled=false;
+        if(cur.place){
+          placeFound.textContent = `Seçili: ${cur.place.label} (≈ ${cur.place.lat.toFixed(5)}, ${cur.place.lng.toFixed(5)}) • ${cur.place.radius_m} m`;
+        }
+        attachAttendance(currentSessionId);
+        pinLinkEl.textContent = (location.origin + location.pathname).replace(/\/admin\/?$/, '') + '/locator/?pin=' + encodeURIComponent(cur.pin||'') + '&sid=' + encodeURIComponent(currentSessionId);
+        pinEl.textContent = cur.pin || '';
+      });
+    }
+
+    startBtn.addEventListener('click', async ()=>{
+      try {
+        const sid = 's_' + Date.now();
+        const pin = newPIN();
+        await db.ref('current').set({ active:true, session_id: sid, started_at: isoNow(), pin });
+        await db.ref('sessions/'+sid+'/meta').set({ started_at: isoNow(), pin });
+        startBtn.disabled=true; stopBtn.disabled=false; clearBtn.disabled=false;
+        pinEl.textContent = pin;
+        pinLinkEl.textContent = (location.origin + location.pathname).replace(/\/admin\/?$/, '') + '/locator/?pin=' + encodeURIComponent(pin) + '&sid=' + encodeURIComponent(sid);
+        setStatus('açık • mekân bekleniyor');
+      } catch(e) { setStatus('Hata: '+(e?.message||e), true); }
+    });
+
+    stopBtn.addEventListener('click', async ()=>{
+      try {
+        const curSnap = await db.ref('current').get();
+        const cur = curSnap.val();
+        if(cur && cur.session_id) { await db.ref('sessions/'+cur.session_id+'/meta').update({ ended_at: isoNow() }); }
+        await db.ref('current').set({ active:false });
+        pinEl.textContent=''; pinLinkEl.textContent=''; placeFound.textContent='';
+        totalEl.textContent='0'; tbody.innerHTML='';
+        startBtn.disabled=false; stopBtn.disabled=true; clearBtn.disabled=true;
+        setStatus('kapalı');
+      } catch(e) { setStatus('Hata: '+(e?.message||e), true); }
+    });
+
+    clearBtn.addEventListener('click', async ()=>{
+      try {
+        const curSnap = await db.ref('current').get();
+        const cur = curSnap.val();
+        if(cur && cur.session_id) { await db.ref('sessions/'+cur.session_id+'/attendance').remove(); }
+      } catch(e) { setStatus('Hata: '+(e?.message||e), true); }
+    });
+
+    findBtn.addEventListener('click', async ()=>{
+      const q=(placeInput.value||'').trim();
+      if(!q) return placeFound.textContent='Lütfen adres/mekân/link gir';
+      placeFound.textContent='Adres aranıyor…';
+      try {
+        const parsed = parseCoordsFromInput(q);
+        selectedPlace = parsed ? parsed : await geocodeFree(q);
+        placeFound.textContent = `Seçildi: ${selectedPlace.label} (≈ ${selectedPlace.lat.toFixed(5)}, ${selectedPlace.lng.toFixed(5)})`;
+        const curSnap = await db.ref('current').get();
+        const cur = curSnap.val();
+        const radiusM = Math.max(50, Math.min(1000, Number(radiusI.value || 150)));
+        if(cur && cur.active && cur.session_id){
+          await db.ref('current/place').set({ lat:selectedPlace.lat, lng:selectedPlace.lng, radius_m: radiusM, label:selectedPlace.label });
+          await db.ref('sessions/'+cur.session_id+'/meta/place').set({ lat:selectedPlace.lat, lng:selectedPlace.lng, radius_m: radiusM, label:selectedPlace.label });
+          setStatus('açık • mekân set');
+        }
+      } catch(e) {
+        console.error(e); placeFound.textContent='Adres bulunamadı';
+      }
+    });
+
+    attachSession();
+    startBtn.disabled=false;
+  </script>
+</body>
+</html>
